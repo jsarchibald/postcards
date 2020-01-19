@@ -1,5 +1,4 @@
-import piexif
-from PIL import Image, ImageFont, ImageDraw
+from PIL import ExifTags, Image, ImageFont, ImageDraw
 from pycountry import countries, subdivisions
 
 import json
@@ -11,35 +10,42 @@ API_KEYS = {
     "MAPQUEST": os.environ["MAPQUEST"]
 }
 
-def get_metadata(name):
-    """Gets metadata from image with filename name"""
-    with open(name, "rb") as f:
-        image = piexif.load(name)
+def get_metadata(name, desired_tags = ["GPSInfo", "DateTimeOriginal", "SubjectArea", "Orientation"]):
+    """Gets EXIF metadata from image with filename name"""
+    image = Image.open(name)
+    exif = dict(image._getexif().items())
+
+    metadata = {}
+    for tag in ExifTags.TAGS:
+        if ExifTags.TAGS[tag] in desired_tags and tag in exif:
+            metadata[ExifTags.TAGS[tag]] = exif[tag]
+
+    data = {}
+    for key in metadata:
+        if key == "GPSInfo":
+            data["GPSInfo"] = {}
+            for tag in ExifTags.GPSTAGS:
+                if tag in metadata["GPSInfo"]:
+                    data["GPSInfo"][ExifTags.GPSTAGS[tag]] = metadata["GPSInfo"][tag]
+        else:
+            data[key] = metadata[key]
     
-    if image["GPS"] != {}:
-        i = image["GPS"]
-        data = {"gps_latitude": i[2],
-                "gps_longitude": i[4],
-                "gps_latitude_ref": i[1].decode("utf-8"),
-                "gps_longitude_ref": i[3].decode("utf-8")
-               }
+    return data
 
-        return data
-    else:
-        return None
+def get_coordinates(metadata):
+    """Gets lat and long coords given an exif metadata dictionary"""
+    lat = metadata["GPSInfo"]["GPSLatitude"]
+    lng = metadata["GPSInfo"]["GPSLongitude"]
+    latitude = (lat[0][0] / lat[0][1]
+                + lat[1][0] / lat[1][1] / 60
+                + lat[2][0] / lat[2][1] / 3600)
+    longitude = (lng[0][0] / lng[0][1]
+                 + lng[1][0] / lng[1][1] / 60
+                 + lng[2][0] / lng[2][1] / 3600)
 
-def get_coordinates(image):
-    """Gets lat and long coords given an exif Image"""
-    latitude = (image["gps_latitude"][0][0] / image["gps_latitude"][0][1]
-                + image["gps_latitude"][1][0] / image["gps_latitude"][1][1] / 60
-                + image["gps_latitude"][2][0] / image["gps_latitude"][2][1] / 3600)
-    longitude = (image["gps_longitude"][0][0] / image["gps_longitude"][0][1]
-                 + image["gps_longitude"][1][0] / image["gps_longitude"][1][1] / 60
-                 + image["gps_longitude"][2][0] / image["gps_longitude"][2][1] / 3600)
-
-    if image["gps_latitude_ref"] != "N":
+    if metadata["GPSInfo"]["GPSLatitudeRef"] != "N":
         latitude *= -1
-    if image["gps_longitude_ref"] != "E":
+    if metadata["GPSInfo"]["GPSLongitudeRef"] != "E":
         longitude *= -1
 
     return (latitude, longitude)
@@ -121,10 +127,18 @@ def get_output_size(image):
     else:
         return 1800, 1200
 
-def get_original_image(infile):
+def get_original_image(infile, metadata):
     """Resizes the original image as necessary and returns it with the target dimensions"""
     original = Image.open(infile)
     width, height = get_output_size(original)
+
+    # Rotate image as needed based on EXIF data
+    if metadata["Orientation"] == 3:
+        original = original.rotate(180, expand = True)
+    elif metadata["Orientation"] == 6:
+        original = original.rotate(270, expand = True)
+    elif metadata["Orientation"] == 8:
+        original = original.rotate(90, expand = True)
 
     # Resize original image to only slightly outsize the target dimensions (if applicable)
     if original.width > original.height:
@@ -182,9 +196,9 @@ def create_image(name, original, width, height, font, text_coords):
 
     return out
 
-def create_images(name, infile):
+def create_images(name, infile, metadata):
     """Creates a set of images that could possibly be used as the final postcard"""
-    original, width, height = get_original_image(infile)
+    original, width, height = get_original_image(infile, metadata)
 
     # For creating a training database, eventually these will change iteratively
     font_size = 120
@@ -197,15 +211,15 @@ def create_images(name, infile):
 
 def main():
     fn = "images/" + sys.argv[1]
-    image = get_metadata(fn)
-    if image is None:
+    metadata = get_metadata(fn)
+    if metadata is None:
         print("Failed")
         return
     
-    coords = get_coordinates(image)
+    coords = get_coordinates(metadata)
     possible_names = get_names(get_location(coords) + get_nearby_locations(coords))
     name = choose_name(possible_names)
-    create_images(name, fn)
+    create_images(name, fn, metadata)
 
 if __name__ == "__main__":
     main()
