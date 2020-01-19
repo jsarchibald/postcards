@@ -86,20 +86,33 @@ def get_names(locations):
         for field in names:
             if field in location and location[field] != "":
                 if field == "adminArea1":
-                    names[field].add(countries.get(alpha_2=location[field]).official_name)
+                    names[field].add(countries.get(alpha_2=location[field]).name)
                 elif field == "adminArea3":
-                    names[field].add(subdivisions.get(code="{0}-{1}".format(location["adminArea1"], location[field])))
+                    names[field].add(subdivisions.get(code = "{0}-{1}".format(
+                        countries.get(alpha_2 = location["adminArea1"]),
+                        location[field]
+                    )))
                 else:
                     names[field].add(location[field])
 
     return names
+
+def contains_digit(text):
+    """Returns true if any digits exist in the text"""
+    return any(c.isdigit() for c in text)
 
 def choose_name(names):
     """Of the names extracted from Mapquest, choose the best one for the postcard"""
     preference_list = ["name", "street", "adminArea6", "adminArea5", "adminArea3", "adminArea4", "adminArea1"]
     for field in preference_list:
         if names[field]:
-            return names[field].pop()
+            if len(names[field]) < 3:
+                tmp = names[field].pop()
+                if field == "street":
+                    if not contains_digit(tmp):
+                        return tmp
+                else:
+                    return tmp
 
 def get_output_size(image):
     """Returns width and height tuple based on vertical or horizontal orientation"""
@@ -108,11 +121,24 @@ def get_output_size(image):
     else:
         return 1800, 1200
 
-def get_text_box(x, y, font_size, image, characters):
+def get_original_image(infile):
+    """Resizes the original image as necessary and returns it with the target dimensions"""
+    original = Image.open(infile)
+    width, height = get_output_size(original)
+
+    # Resize original image to only slightly outsize the target dimensions (if applicable)
+    if original.width > original.height:
+        original = original.resize((width, round(width / original.width * original.height)))
+    else:
+        original = original.resize((round(height / original.height * original.width), height))
+
+    return original, width, height
+
+def get_text_box(x, y, font, image, text):
     """Returns the crop box of a section of image given text coords and font size"""
-    estimated_text_width = .8 * font_size * characters
-    width = min(estimated_text_width, image.width - x)
-    height = min(font_size, image.height - y)
+    est_text_width, est_text_height = font.getsize(text)
+    width = min(est_text_width, image.width - x)
+    height = min(est_text_height, image.height - y)
 
     return x, y, width, height
 
@@ -131,19 +157,17 @@ def get_font_color(average_color_metric):
     else:
         return (0, 0, 0), average_color_metric[:3]
 
-def create_images(name, infile):
-    """Creates a set of images that could possibly be used as the final postcard"""
-    original = Image.open(infile)
-    width, height = get_output_size(original)
+def create_image(name, original, width, height, font, text_coords):
+    """Create an individual image given the necessary parameters"""
 
-    # For creating a training database, eventually these will change iteratively
-    font_size = 150
-    font = ImageFont.truetype("Bebas-Regular.otf", font_size)
-    text_coords = 10, 0
-    
     # Check the average color of the section where the text will go, and decide if dark (white text) or light (black text)
     text_section = original.copy()
-    text_section = text_section.crop(box = get_text_box(text_coords[0], text_coords[1], font_size, original, len(name)))
+    text_section = text_section.crop(box = get_text_box(text_coords[0],
+                                                        text_coords[1],
+                                                        font,
+                                                        original,
+                                                        name
+                                                       ))
     average_color_metric = get_average_color(text_section)
     text_primary, text_secondary = get_font_color(average_color_metric)
 
@@ -155,8 +179,21 @@ def create_images(name, infile):
     draw = ImageDraw.Draw(out)
     draw.text((text_coords[0] + 5, text_coords[1] + 5), name, text_secondary, font=font)
     draw.text(text_coords, name, text_primary, font=font)
+
+    return out
+
+def create_images(name, infile):
+    """Creates a set of images that could possibly be used as the final postcard"""
+    original, width, height = get_original_image(infile)
+
+    # For creating a training database, eventually these will change iteratively
+    font_size = 120
+    font = ImageFont.truetype("Roboto-Black.ttf", font_size)
+    text_coords = 10, 10
     
-    out.save("{0}.jpg".format(name))
+    out = create_image(name.upper(), original, width, height, font, text_coords)
+    
+    out.save("out/{0}.jpg".format(name))
 
 def main():
     fn = "images/" + sys.argv[1]
