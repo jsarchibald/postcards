@@ -92,8 +92,15 @@ def get_names(locations):
 
     return names
 
+def choose_name(names):
+    """Of the names extracted from Mapquest, choose the best one for the postcard"""
+    preference_list = ["name", "street", "adminArea6", "adminArea5", "adminArea3", "adminArea4", "adminArea1"]
+    for field in preference_list:
+        if names[field]:
+            return names[field].pop()
+
 def main():
-    image = get_metadata("images/nh.jpg")
+    image = get_metadata("images/charles.jpg")
     if image is None:
         print("Failed")
         return
@@ -101,7 +108,7 @@ def main():
     coords = get_coordinates(image)
     possible_names = get_names(get_location(coords) + get_nearby_locations(coords))
 
-    # TODO
+    print(choose_name(possible_names))
 
 if __name__ == "__main__":
     main()
