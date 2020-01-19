@@ -1,3 +1,7 @@
 .vscode
 env
 images
+*.jpg
+*.png
+*.otf
+*.ttf

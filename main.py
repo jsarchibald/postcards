@@ -1,9 +1,11 @@
 import piexif
+from PIL import Image, ImageFont, ImageDraw
 from pycountry import countries, subdivisions
 
 import json
 import os
 import requests
+import sys
 
 API_KEYS = {
     "MAPQUEST": os.environ["MAPQUEST"]
@@ -99,16 +101,74 @@ def choose_name(names):
         if names[field]:
             return names[field].pop()
 
+def get_output_size(image):
+    """Returns width and height tuple based on vertical or horizontal orientation"""
+    if image.width < image.height:
+        return 1200, 1800
+    else:
+        return 1800, 1200
+
+def get_text_box(x, y, font_size, image, characters):
+    """Returns the crop box of a section of image given text coords and font size"""
+    estimated_text_width = .8 * font_size * characters
+    width = min(estimated_text_width, image.width - x)
+    height = min(font_size, image.height - y)
+
+    return x, y, width, height
+
+def get_average_color(image):
+    """Returns the RGB tuple (and average RGB) representing the average color of a section of an image"""
+    image = image.resize((1, 1))
+    rgb = image.getpixel((0, 0))
+    average_color_metric = sum(rgb) / 3
+
+    return rgb[0], rgb[1], rgb[2], average_color_metric
+
+def get_font_color(average_color_metric):
+    """Returns tuple of primary and secondary colors depending on average color metric"""
+    if average_color_metric[3] < 128:
+        return (255, 255, 255), average_color_metric[:3]
+    else:
+        return (0, 0, 0), average_color_metric[:3]
+
+def create_images(name, infile):
+    """Creates a set of images that could possibly be used as the final postcard"""
+    original = Image.open(infile)
+    width, height = get_output_size(original)
+
+    # For creating a training database, eventually these will change iteratively
+    font_size = 150
+    font = ImageFont.truetype("Bebas-Regular.otf", font_size)
+    text_coords = 10, 0
+    
+    # Check the average color of the section where the text will go, and decide if dark (white text) or light (black text)
+    text_section = original.copy()
+    text_section = text_section.crop(box = get_text_box(text_coords[0], text_coords[1], font_size, original, len(name)))
+    average_color_metric = get_average_color(text_section)
+    text_primary, text_secondary = get_font_color(average_color_metric)
+
+    # Crop the original image to our target dimensions
+    i = original.copy()
+    out = i.crop(box=(0, 0, width, height))
+
+    # Add text overlay
+    draw = ImageDraw.Draw(out)
+    draw.text((text_coords[0] + 5, text_coords[1] + 5), name, text_secondary, font=font)
+    draw.text(text_coords, name, text_primary, font=font)
+    
+    out.save("{0}.jpg".format(name))
+
 def main():
-    image = get_metadata("images/charles.jpg")
+    fn = "images/" + sys.argv[1]
+    image = get_metadata(fn)
     if image is None:
         print("Failed")
         return
     
     coords = get_coordinates(image)
     possible_names = get_names(get_location(coords) + get_nearby_locations(coords))
-
-    print(choose_name(possible_names))
+    name = choose_name(possible_names)
+    create_images(name, fn)
 
 if __name__ == "__main__":
     main()
