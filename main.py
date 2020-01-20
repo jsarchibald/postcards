@@ -1,10 +1,12 @@
 from argparse import ArgumentParser
+from io import BytesIO
 from PIL import ExifTags, Image, ImageFont, ImageDraw
 from pycountry import countries, subdivisions
 
 import json
 import os
 import requests
+import sqlite3
 
 API_KEYS = {
     "MAPQUEST": os.environ["MAPQUEST"]
@@ -225,21 +227,21 @@ def get_text_locations(id, font, text, width, height):
     """Return a list of text coordinates based on marker"""
     w, h = font.getsize(text)
     if id == "NW":
-        return [(10, 10)]
+        return {"NW": (10, 10)}
     elif id == "NE":
-        return [(.8 * width - w - 10, 10)]
+        return {"NE": (.8 * width - w - 10, 10)}
     elif id == "SW":
-        return [(10, height - h - 10)]
+        return {"SW": (10, height - h - 10)}
     elif id == "SE":
-        return [(.8 * width - w - 10, height - h - 10)]
+        return {"SE": (.8 * width - w - 10, height - h - 10)}
     else:
-        return [(10, 10),
-                (.8 * width - w - 10, 10),
-                (10, height - h - 10),
-                (.8 * width - w - 10, height - h - 10)
-               ]
+        return {"NW": (10, 10),
+                "NE": (.8 * width - w - 10, 10),
+                "SW": (10, height - h - 10),
+                "SE": (.8 * width - w - 10, height - h - 10)
+               } 
 
-def create_images(name, infile, metadata, filename, text_location):
+def create_images(name, infile, metadata, filename, text_location, db):
     """Creates a set of images that could possibly be used as the final postcard"""
     try:
         original, width, height = get_original_image(infile, metadata)
@@ -250,31 +252,62 @@ def create_images(name, infile, metadata, filename, text_location):
     text_coords = 10, 10
     font = get_font("Roboto-Black.ttf", text_coords, width, height, name)
     coords = get_text_locations(text_location, font, name, width, height)
+
+    source = BytesIO()
+    original.save(source, format="JPEG")
+    db.execute("INSERT INTO source_images (image) VALUES (?) ", (source.getvalue(), ))
+    source_id = db.lastrowid
     
     i = 0
     for coord in coords:
-        out = create_image(name.upper(), original, width, height, font, coord)
-        out.save("out/{0}_{1}_{2}.jpg".format(filename, i, name))
+        out = create_image(name.upper(), original, width, height, font, coords[coord])
+        outname = "{0}_{1}_{2}.jpg".format(filename, i, name)
+        if db is None:
+            out.save("out/{0}".format(outname))
+        else:
+            io = BytesIO()
+            out.save(io, format="JPEG")
+            db.execute("INSERT INTO postcards (name, text_alignment, source_image_id, image) VALUES (?, ?, ?, ?)",
+                       (outname, coord, source_id, io.getvalue()))
         i += 1
 
-def process_image(filename, outindex, text_location):
+def process_image(filename, outindex, text_location, db):
     """The process for creating a set of images based on an input image"""
     metadata = get_metadata(filename)
     if metadata is None or "GPSInfo" not in metadata:
         print("Failed: lack GPS metadata for {0}".format(filename))
         return
+    if db is not None:
+        con = sqlite3.connect(db)
+        db = con.cursor()
     
     coords = get_coordinates(metadata)
     possible_names = get_names(get_location(coords) + get_nearby_locations(coords))
     name = choose_name(possible_names)
-    create_images(name, filename, metadata, outindex, text_location)
+    create_images(name, filename, metadata, outindex, text_location, db)
+    con.commit()
+    con.close()
 
 def get_arguments():
     """CLI argument parser"""
     parser = ArgumentParser(description="Generate postcards based on EXIF GPS data.")
-    parser.add_argument("-t", dest="text_location", nargs=1, default="NW", choices=["NW", "NE", "SW", "SE", "*"], help="Location of text on postcard, from NW, NE, SW, SE, or * for one of each.")
-    parser.add_argument("-d", dest="directory", nargs=1, default=".", help="Directory with input JPEG files. Defaults to current directory.")
-    parser.add_argument("file_name", help="Input JPEG name. * for all in the directory.")
+    parser.add_argument("-t",
+                        dest="text_location",
+                        nargs=1,
+                        default="NW",
+                        choices=["NW", "NE", "SW", "SE", "*"],
+                        help="Location of text on postcard. * for one of each.")
+    parser.add_argument("-d",
+                        dest="directory",
+                        nargs=1,
+                        default=".",
+                        help="Directory with input JPEG files. Defaults to current directory.")
+    parser.add_argument("-b",
+                        dest="database",
+                        nargs=1,
+                        help="Name of SQLite file in which to store images.")
+    parser.add_argument("file_name",
+                        help="Input JPEG name. * for all in the directory.")
     
     return parser.parse_args()
 
@@ -282,13 +315,13 @@ def main():
     args = get_arguments()
 
     if args.file_name != "*":
-        process_image(args.filename, 0, args.text_location[0])
+        process_image(args.filename, 0, args.text_location[0], args.database)
     else:
         i = 0
         with os.scandir(args.directory[0]) as files:
             for f in files:
                 if f.is_file():
-                    process_image(f.path, i, args.text_location[0])
+                    process_image(f.path, i, args.text_location[0], args.database[0])
                     i += 1
 
 if __name__ == "__main__":
