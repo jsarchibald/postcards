@@ -1,10 +1,10 @@
+from argparse import ArgumentParser
 from PIL import ExifTags, Image, ImageFont, ImageDraw
 from pycountry import countries, subdivisions
 
 import json
 import os
 import requests
-import sys
 
 API_KEYS = {
     "MAPQUEST": os.environ["MAPQUEST"]
@@ -12,8 +12,11 @@ API_KEYS = {
 
 def get_metadata(name, desired_tags = ["GPSInfo", "DateTimeOriginal", "SubjectArea", "Orientation"]):
     """Gets EXIF metadata from image with filename name"""
-    image = Image.open(name)
-    exif = dict(image._getexif().items())
+    try:
+        image = Image.open(name)
+        exif = dict(image._getexif().items())
+    except:
+        return None
 
     metadata = {}
     for tag in ExifTags.TAGS:
@@ -34,6 +37,9 @@ def get_metadata(name, desired_tags = ["GPSInfo", "DateTimeOriginal", "SubjectAr
 
 def get_coordinates(metadata):
     """Gets lat and long coords given an exif metadata dictionary"""
+    if "GPSInfo" not in metadata:
+        return None
+
     lat = metadata["GPSInfo"]["GPSLatitude"]
     lng = metadata["GPSInfo"]["GPSLongitude"]
     latitude = (lat[0][0] / lat[0][1]
@@ -129,7 +135,10 @@ def get_output_size(image):
 
 def get_original_image(infile, metadata):
     """Resizes the original image as necessary and returns it with the target dimensions"""
-    original = Image.open(infile)
+    try:
+        original = Image.open(infile)
+    except:
+        return None
     width, height = get_output_size(original)
 
     # Rotate image as needed based on EXIF data
@@ -212,29 +221,75 @@ def create_image(name, original, width, height, font, text_coords):
 
     return out
 
-def create_images(name, infile, metadata):
+def get_text_locations(id, font, text, width, height):
+    """Return a list of text coordinates based on marker"""
+    w, h = font.getsize(text)
+    if id == "NW":
+        return [(10, 10)]
+    elif id == "NE":
+        return [(.8 * width - w - 10, 10)]
+    elif id == "SW":
+        return [(10, height - h - 10)]
+    elif id == "SE":
+        return [(.8 * width - w - 10, height - h - 10)]
+    else:
+        return [(10, 10),
+                (.8 * width - w - 10, 10),
+                (10, height - h - 10),
+                (.8 * width - w - 10, height - h - 10)
+               ]
+
+def create_images(name, infile, metadata, filename, text_location):
     """Creates a set of images that could possibly be used as the final postcard"""
-    original, width, height = get_original_image(infile, metadata)
+    try:
+        original, width, height = get_original_image(infile, metadata)
+    except:
+        return None
 
     # For creating a training database, eventually these will change iteratively
     text_coords = 10, 10
     font = get_font("Roboto-Black.ttf", text_coords, width, height, name)
+    coords = get_text_locations(text_location, font, name, width, height)
     
-    out = create_image(name.upper(), original, width, height, font, text_coords)
-    
-    out.save("out/{0}.jpg".format(name))
+    i = 0
+    for coord in coords:
+        out = create_image(name.upper(), original, width, height, font, coord)
+        out.save("out/{0}_{1}_{2}.jpg".format(filename, i, name))
+        i += 1
 
-def main():
-    fn = "images/" + sys.argv[1]
-    metadata = get_metadata(fn)
-    if metadata is None:
-        print("Failed")
+def process_image(filename, outindex, text_location):
+    """The process for creating a set of images based on an input image"""
+    metadata = get_metadata(filename)
+    if metadata is None or "GPSInfo" not in metadata:
+        print("Failed: lack GPS metadata for {0}".format(filename))
         return
     
     coords = get_coordinates(metadata)
     possible_names = get_names(get_location(coords) + get_nearby_locations(coords))
     name = choose_name(possible_names)
-    create_images(name, fn, metadata)
+    create_images(name, filename, metadata, outindex, text_location)
+
+def get_arguments():
+    """CLI argument parser"""
+    parser = ArgumentParser(description="Generate postcards based on EXIF GPS data.")
+    parser.add_argument("-t", dest="text_location", nargs=1, default="NW", choices=["NW", "NE", "SW", "SE", "*"], help="Location of text on postcard, from NW, NE, SW, SE, or * for one of each.")
+    parser.add_argument("-d", dest="directory", nargs=1, default=".", help="Directory with input JPEG files. Defaults to current directory.")
+    parser.add_argument("file_name", help="Input JPEG name. * for all in the directory.")
+    
+    return parser.parse_args()
+
+def main():
+    args = get_arguments()
+
+    if args.file_name != "*":
+        process_image(args.filename, 0, args.text_location[0])
+    else:
+        i = 0
+        with os.scandir(args.directory[0]) as files:
+            for f in files:
+                if f.is_file():
+                    process_image(f.path, i, args.text_location[0])
+                    i += 1
 
 if __name__ == "__main__":
     main()
