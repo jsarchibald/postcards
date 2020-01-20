@@ -133,12 +133,13 @@ def get_original_image(infile, metadata):
     width, height = get_output_size(original)
 
     # Rotate image as needed based on EXIF data
-    if metadata["Orientation"] == 3:
-        original = original.rotate(180, expand = True)
-    elif metadata["Orientation"] == 6:
-        original = original.rotate(270, expand = True)
-    elif metadata["Orientation"] == 8:
-        original = original.rotate(90, expand = True)
+    if "Orientation" in metadata:
+        if metadata["Orientation"] == 3:
+            original = original.rotate(180, expand = True)
+        elif metadata["Orientation"] == 6:
+            original = original.rotate(270, expand = True)
+        elif metadata["Orientation"] == 8:
+            original = original.rotate(90, expand = True)
 
     # Resize original image to only slightly outsize the target dimensions (if applicable)
     if original.width > original.height:
@@ -171,6 +172,21 @@ def get_font_color(average_color_metric):
     else:
         return (0, 0, 0), average_color_metric[:3]
 
+def get_font(name, text_coords, width, height, text):
+    """Choose a reasonable font size, 20-150pt, that will fit the characters"""
+    x, y = text_coords
+
+    for font_size in range(20, 150):
+        font = ImageFont.truetype(name, font_size)
+        available_width = .8 * (width - x * 2)
+        available_height = .8 * (height - y * 2)
+        est_text_width, est_text_height = font.getsize(text)
+        
+        if ((est_text_width > available_width
+             and est_text_height < available_height) 
+            or font_size == 149):
+            return ImageFont.truetype(name, font_size - 10)
+
 def create_image(name, original, width, height, font, text_coords):
     """Create an individual image given the necessary parameters"""
 
@@ -201,9 +217,8 @@ def create_images(name, infile, metadata):
     original, width, height = get_original_image(infile, metadata)
 
     # For creating a training database, eventually these will change iteratively
-    font_size = 120
-    font = ImageFont.truetype("Roboto-Black.ttf", font_size)
     text_coords = 10, 10
+    font = get_font("Roboto-Black.ttf", text_coords, width, height, name)
     
     out = create_image(name.upper(), original, width, height, font, text_coords)
     
